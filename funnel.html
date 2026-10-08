@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; connect-src 'self' https://api.github.com; base-uri 'self'; form-action 'self'; object-src 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Onboarding · Autometrik Help Desk</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header id="nav"></header>
+  <main class="container">
+    <div class="toolbar">
+      <div>
+        <h1>Customer onboarding</h1>
+        <p class="muted">Every shop from first contact to go-live.</p>
+      </div>
+      <button id="newCustBtn" class="btn primary" type="button">+ New customer</button>
+    </div>
+
+    <section id="kpis" class="stat-row" aria-label="Key numbers"></section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Funnel</h2>
+        <span class="muted small">Customers who reached each stage · conversion from the previous stage · average days spent there</span>
+      </div>
+      <div id="funnelChart" class="funnel" role="table" aria-label="Onboarding funnel"></div>
+    </section>
+
+    <div class="filters">
+      <label class="sr-only" for="q">Search</label>
+      <input id="q" type="search" placeholder="Search shop, contact, city…">
+      <label class="sr-only" for="fOwner">Owner</label><select id="fOwner"><option value="">All owners</option></select>
+      <label class="check"><input type="checkbox" id="showLost"> Show lost</label>
+      <button id="refreshBtn" class="btn" type="button">Refresh</button>
+    </div>
+
+    <div id="board" class="board"></div>
+  </main>
+
+  <!-- Create / edit customer -->
+  <dialog id="custDialog" class="dialog" aria-labelledby="custTitle">
+    <form id="custForm" class="dialog-inner">
+      <header class="dialog-head">
+        <h2 id="custTitle">New customer</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close">×</button>
+      </header>
+      <div class="dialog-body">
+        <div class="form-grid">
+          <div class="field span-2"><label for="cShop">Shop name *</label><input id="cShop" required maxlength="150" placeholder="e.g. JM Tire & Auto Service"></div>
+          <div class="field"><label for="cContact">Contact person</label><input id="cContact" maxlength="120"></div>
+          <div class="field"><label for="cPhone">Phone</label><input id="cPhone" type="tel" maxlength="40"></div>
+          <div class="field"><label for="cEmail">Email</label><input id="cEmail" type="email" maxlength="120"></div>
+          <div class="field"><label for="cCity">City / area</label><input id="cCity" maxlength="80"></div>
+          <div class="field"><label for="cBranches">Branches</label><input id="cBranches" type="number" min="1" step="1"></div>
+          <div class="field"><label for="cPlan">Plan</label><input id="cPlan" list="planList" maxlength="60"></div>
+          <div class="field"><label for="cValue">Monthly value (₱)</label><input id="cValue" type="number" min="0" step="1"></div>
+          <div class="field"><label for="cSource">Lead source</label><select id="cSource"></select></div>
+          <div class="field create-only"><label for="cOwner">Owner</label><select id="cOwner"></select></div>
+          <div class="field create-only"><label for="cStage">Starting stage</label><select id="cStage"></select></div>
+          <div class="field span-2"><label for="cNotes">Notes</label><textarea id="cNotes" rows="4" placeholder="Current system, pain points, decision maker, timeline…"></textarea></div>
+        </div>
+      </div>
+      <footer class="dialog-foot">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary" id="cSave" data-busy="Saving…">Add customer</button>
+      </footer>
+    </form>
+  </dialog>
+  <datalist id="planList"></datalist>
+
+  <!-- Customer detail -->
+  <dialog id="detailDialog" class="dialog wide" aria-label="Customer details">
+    <div id="detailBody" class="dialog-inner"></div>
+  </dialog>
+
+  <script src="js/config.js"></script>
+  <script src="js/crypto.js"></script>
+  <script src="js/common.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/funnel.js"></script>
+</body>
+</html>

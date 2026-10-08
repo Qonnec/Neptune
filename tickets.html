@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; connect-src 'self' https://api.github.com; base-uri 'self'; form-action 'self'; object-src 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Tickets · Autometrik Help Desk</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header id="nav"></header>
+  <main class="container">
+    <section id="listView">
+      <div class="toolbar">
+        <div>
+          <h1>Support tickets</h1>
+          <p class="muted" id="count">Loading…</p>
+        </div>
+        <button id="newTicketBtn" class="btn primary" type="button">+ New ticket</button>
+      </div>
+      <div id="summary" class="stat-row" hidden></div>
+      <div class="filters">
+        <label class="sr-only" for="q">Search</label>
+        <input id="q" type="search" placeholder="Search #, subject, shop, contact…">
+        <label class="sr-only" for="fStatus">Status</label><select id="fStatus"></select>
+        <label class="sr-only" for="fPriority">Priority</label><select id="fPriority"></select>
+        <label class="sr-only" for="fCategory">Category</label><select id="fCategory"></select>
+        <label class="sr-only" for="fAssignee">Assignee</label><select id="fAssignee"><option value="">Anyone</option></select>
+        <label class="sr-only" for="sort">Sort</label>
+        <select id="sort">
+          <option value="updated">Recently updated</option>
+          <option value="priority">Highest priority</option>
+          <option value="oldest">Oldest first</option>
+        </select>
+        <button id="refreshBtn" class="btn" type="button">Refresh</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>#</th><th>Subject / shop</th><th>Status</th><th>Priority</th>
+              <th class="hide-sm">Category</th><th class="hide-sm">Assignee</th><th class="hide-sm">Updated</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <p id="empty" class="empty" hidden>No tickets match these filters.</p>
+      </div>
+    </section>
+
+    <section id="detailView" hidden></section>
+  </main>
+
+  <dialog id="ticketDialog" class="dialog" aria-labelledby="dlgTitle">
+    <form id="ticketForm" class="dialog-inner">
+      <header class="dialog-head">
+        <h2 id="dlgTitle">New ticket</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close">×</button>
+      </header>
+      <div class="dialog-body">
+        <div class="form-grid">
+          <div class="field span-2"><label for="tTitle">Subject *</label><input id="tTitle" required maxlength="200" placeholder="e.g. Cannot print official receipt after update"></div>
+          <div class="field"><label for="tCustomer">Shop / customer *</label><input id="tCustomer" required list="customerList" maxlength="120"></div>
+          <div class="field"><label for="tContact">Contact person</label><input id="tContact" maxlength="120"></div>
+          <div class="field"><label for="tPhone">Phone</label><input id="tPhone" type="tel" maxlength="40"></div>
+          <div class="field"><label for="tEmail">Email</label><input id="tEmail" type="email" maxlength="120"></div>
+          <div class="field create-only"><label for="tCategory">Category</label><select id="tCategory"></select></div>
+          <div class="field create-only"><label for="tPriority">Priority</label><select id="tPriority"></select></div>
+          <div class="field create-only span-2"><label for="tAssignee">Assign to</label><select id="tAssignee"></select></div>
+          <div class="field span-2"><label for="tDesc">Description</label><textarea id="tDesc" rows="7" placeholder="What happened? Steps to reproduce, error messages, which branch/terminal, screenshots links…"></textarea></div>
+        </div>
+      </div>
+      <footer class="dialog-foot">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary" id="tSave" data-busy="Saving…">Create ticket</button>
+      </footer>
+    </form>
+  </dialog>
+  <datalist id="customerList"></datalist>
+
+  <script src="js/config.js"></script>
+  <script src="js/crypto.js"></script>
+  <script src="js/common.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/tickets.js"></script>
+</body>
+</html>
