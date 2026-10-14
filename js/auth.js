@@ -1,72 +1,117 @@
 "use strict";
-/* Login, session (sessionStorage, cleared when the tab closes) and idle timeout. */
+/*
+ * Google sign-in (Firebase Auth), staff check, session and idle timeout.
+ * Sign-in only proves who someone is. Access is granted by a document in the Firestore
+ * "staff" collection (id = lower-case email, active: true), and enforced by firestore.rules.
+ */
 const Auth = (() => {
-  const KEY = "hd_session";
   const C = window.HD_CONFIG;
+  const LAST = "hd_last";
   const timeoutMs = () => C.sessionTimeoutMinutes * 60000;
+  let current = null;
+  let leaving = false;
 
-  function session() {
-    try { return JSON.parse(sessionStorage.getItem(KEY)); } catch { return null; }
+  // ---------- Idle tracking (sessionStorage, cleared when the tab closes) ----------
+  function lastActive() {
+    try { return Number(sessionStorage.getItem(LAST)) || 0; } catch { return 0; }
   }
-  function save(s) {
-    try { sessionStorage.setItem(KEY, JSON.stringify(s)); } catch { /* storage blocked */ }
+  function setLast(t) {
+    try { sessionStorage.setItem(LAST, String(t)); } catch { /* storage blocked */ }
   }
-  const expired = s => !s || Date.now() - (s.last || 0) > timeoutMs();
+  const expired = () => Date.now() - lastActive() > timeoutMs();
 
-  function ghGet(token, path) {
-    return fetch(`https://api.github.com${path}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28"
-      }
+  /** Resolves with the signed-in Firebase user (or null) once Firebase has restored the session. */
+  function firstUser() {
+    return new Promise(resolve => {
+      const off = FB.auth.onAuthStateChanged(u => { off(); resolve(u); });
     });
   }
 
-  async function login(username, password) {
-    const uname = String(username || "").trim().toLowerCase();
-    if (!uname || !password) throw new Error("Enter your username and password.");
+  async function loadStaff(user) {
+    const email = String(user.email || "").toLowerCase();
+    if (!email || !user.emailVerified) return null;
+    const snap = await FB.db.collection("staff").doc(email).get();
+    if (!snap.exists) return null;
+    const d = snap.data();
+    return d.active === false ? null : d;
+  }
 
-    const res = await fetch(`${C.usersFile}?t=${Date.now()}`, { cache: "no-store" });
-    if (!res.ok) throw new Error("Could not load the user file. Check the site setup.");
-    const users = await res.json();
+  function toSession(user, staff) {
+    const email = user.email.toLowerCase();
+    return {
+      uid: user.uid,
+      email,
+      name: staff.name || user.displayName || email,
+      role: staff.role === "admin" ? "admin" : "agent",
+      avatar: user.photoURL || ""
+    };
+  }
 
-    const id = await HDCrypto.userId(uname);
-    const entry = Array.isArray(users) ? users.find(u => u.id === id) : null;
-    const invalid = "Invalid username or password.";
-    if (!entry) { await HDCrypto.burn(password); throw new Error(invalid); }
+  function signInError(e) {
+    switch (e && e.code) {
+      case "auth/popup-closed-by-user":
+      case "auth/cancelled-popup-request":
+        return "Sign-in was cancelled.";
+      case "auth/popup-blocked":
+        return "Your browser blocked the Google sign-in window. Allow pop-ups for this site and try again.";
+      case "auth/unauthorized-domain":
+        return "This site's domain isn't authorized in Firebase (Authentication → Settings → Authorized domains).";
+      case "auth/operation-not-allowed":
+        return "Google sign-in is not enabled in Firebase (Authentication → Sign-in method → Google).";
+      case "auth/network-request-failed":
+        return "Network error — check your internet connection.";
+      default:
+        return (e && e.message) || "Sign-in failed.";
+    }
+  }
 
-    let profile;
-    try { profile = await HDCrypto.decryptEntry(entry, password); }
-    catch { throw new Error(invalid); }
+  async function signIn() {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    const params = { prompt: "select_account" };
+    if (C.allowedDomain) params.hd = C.allowedDomain;
+    provider.setCustomParameters(params);
 
-    const me = await ghGet(profile.token, "/user");
-    if (me.status === 401) throw new Error("Your GitHub access token has expired or was revoked. Ask an admin for a new one.");
-    if (!me.ok) throw new Error(`Could not reach GitHub (${me.status}).`);
-    const gh = await me.json();
+    let cred;
+    try {
+      // Called straight from the click (no await before it) so browsers don't block the pop-up.
+      cred = await FB.auth.signInWithPopup(provider);
+    } catch (e) {
+      throw new Error(signInError(e));
+    }
 
-    const repo = await ghGet(profile.token, `/repos/${C.dataOwner}/${C.dataRepo}`);
-    if (!repo.ok) throw new Error("Your access token cannot open the help desk data repository. Ask an admin to check its permissions.");
+    const user = cred.user;
+    const email = String(user.email || "").toLowerCase();
+    if (C.allowedDomain && !email.endsWith("@" + C.allowedDomain.toLowerCase())) {
+      await FB.auth.signOut();
+      throw new Error(`Please sign in with your @${C.allowedDomain} account.`);
+    }
 
-    save({
-      username: uname,
-      name: profile.name || uname,
-      role: profile.role || "agent",
-      token: profile.token,
-      login: gh.login,
-      avatar: gh.avatar_url,
-      last: Date.now()
-    });
+    let staff;
+    try { staff = await loadStaff(user); }
+    catch (e) {
+      await FB.auth.signOut();
+      throw new Error(`Could not check your access (${e.code || e.message}).`);
+    }
+    if (!staff) {
+      await FB.auth.signOut();
+      throw new Error(`${email} is not on the help desk staff list. Ask a help desk admin to add you.`);
+    }
+    setLast(Date.now());
+    current = toSession(user, staff);
+    return current;
   }
 
   function logout(msg) {
-    try { sessionStorage.removeItem(KEY); } catch { /* ignore */ }
-    location.replace("index.html" + (msg ? `?msg=${encodeURIComponent(msg)}` : ""));
+    if (leaving) return;
+    leaving = true;
+    current = null;
+    try { sessionStorage.removeItem(LAST); } catch { /* ignore */ }
+    const go = () => location.replace("index.html" + (msg ? `?msg=${encodeURIComponent(msg)}` : ""));
+    FB.auth.signOut().catch(() => {}).finally(go);
   }
 
   function touch() {
-    const s = session();
-    if (s && !expired(s)) { s.last = Date.now(); save(s); }
+    if (current && !expired()) setLast(Date.now());
   }
 
   let watching = false;
@@ -81,19 +126,35 @@ const Auth = (() => {
     ["click", "keydown", "pointermove", "touchstart", "scroll"].forEach(ev =>
       window.addEventListener(ev, onActivity, { passive: true }));
     setInterval(() => {
-      if (expired(session())) logout("You were signed out after inactivity.");
+      if (expired()) logout("You were signed out after inactivity.");
     }, 30000);
+    // Signed out in another tab, or the account was disabled
+    FB.auth.onAuthStateChanged(u => { if (!u && current) logout(); });
   }
 
-  /** Call at the top of every protected page. Returns the session or redirects to login. */
-  function requireLogin() {
-    const s = session();
-    if (!s) { logout(); return null; }
-    if (expired(s)) { logout("You were signed out after inactivity."); return null; }
+  /**
+   * Call at the top of every protected page:  const s = await Auth.requireLogin();
+   * Resolves with the session, or redirects to the sign-in page and resolves null.
+   */
+  async function requireLogin() {
+    const user = await firstUser();
+    if (!user) { logout(); return null; }
+    if (expired()) { logout("You were signed out after inactivity."); return null; }
+    let staff;
+    try { staff = await loadStaff(user); }
+    catch { logout("Could not check your access. Please sign in again."); return null; }
+    if (!staff) { logout("Your account doesn't have access to the help desk. Ask an admin."); return null; }
+    current = toSession(user, staff);
     touch();
     watch();
-    return session();
+    return current;
   }
 
-  return { login, logout, session, requireLogin, isActive: () => !expired(session()) };
+  /** True when a Google session exists in this tab and hasn't gone idle. */
+  async function isActive() {
+    const user = await firstUser();
+    return !!user && !expired();
+  }
+
+  return { signIn, logout, requireLogin, isActive, session: () => current };
 })();

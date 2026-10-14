@@ -1,0 +1,120 @@
+rules_version = '2';
+
+// Autometrik Help Desk — Firestore security rules.
+// Paste into Firebase console → Firestore Database → Rules → Publish.
+// These rules ARE the security: the website code is public, the data is not.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Who is signed in ----------
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+    function myEmail() { return request.auth.token.email.lower(); }
+    function staffPath() { return /databases/$(database)/documents/staff/$(myEmail()); }
+    function isStaff() {
+      return signedIn() && exists(staffPath()) && get(staffPath()).data.active == true;
+    }
+    function isAdmin() { return isStaff() && get(staffPath()).data.role == 'admin'; }
+
+    // ---------- Staff list (doc id = lower-case Google email) ----------
+    match /staff/{email} {
+      // Anyone signed in may read their OWN entry (needed to check access at sign-in).
+      allow read: if isStaff() || (signedIn() && email == myEmail());
+      allow create, update: if isAdmin()
+        && email == email.lower()
+        && request.resource.data.keys().hasOnly(['name', 'role', 'active', 'updatedAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() <= 80
+        && request.resource.data.role in ['admin', 'agent']
+        && request.resource.data.active is bool
+        // an admin cannot demote or deactivate themselves (avoids locking everyone out)
+        && (email != myEmail() || (request.resource.data.role == 'admin' && request.resource.data.active == true));
+      allow delete: if isAdmin() && email != myEmail();
+    }
+
+    // ---------- Sequential numbers ----------
+    match /counters/{kind} {
+      allow read: if isStaff();
+      allow create, update: if isStaff()
+        && kind in ['tickets', 'customers']
+        && request.resource.data.keys().hasOnly(['last'])
+        && request.resource.data.last == (resource == null ? 0 : resource.data.last) + 1;
+    }
+
+    function counterAfter(kind) {
+      return getAfter(/databases/$(database)/documents/counters/$(kind)).data.last;
+    }
+    function keepsIdentity() {
+      return request.resource.data.n == resource.data.n
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdByEmail == resource.data.createdByEmail;
+    }
+
+    // ---------- Support tickets ----------
+    function validTicket() {
+      let d = request.resource.data;
+      return d.title is string && d.title.size() > 0 && d.title.size() <= 200
+        && d.status is string && d.priority is string
+        && d.closed is bool && d.closed == (d.status == 'closed')
+        && d.assignee is string
+        && (!('description' in d) || (d.description is string && d.description.size() <= 50000));
+    }
+
+    match /tickets/{id} {
+      allow read: if isStaff();
+      allow create: if isStaff() && validTicket()
+        && request.resource.data.n == int(id)
+        && counterAfter('tickets') == int(id)
+        && request.resource.data.createdByEmail == myEmail();
+      allow update: if isStaff() && validTicket() && keepsIdentity();
+      allow delete: if isAdmin();
+
+      match /comments/{c} {
+        allow read: if isStaff();
+        allow create: if isStaff() && validComment();
+        allow update, delete: if false; // the activity log is append-only
+      }
+    }
+
+    // ---------- Onboarding customers ----------
+    function validCustomer() {
+      let d = request.resource.data;
+      return d.shop is string && d.shop.size() > 0 && d.shop.size() <= 150
+        && d.stage is string
+        && d.lost is bool && d.lost == (d.stage == 'lost')
+        && d.owner is string
+        && d.checklist is list && d.checklist.size() <= 100
+        && d.history is list && d.history.size() <= 500
+        && (!('notes' in d) || (d.notes is string && d.notes.size() <= 50000));
+    }
+
+    match /customers/{id} {
+      allow read: if isStaff();
+      allow create: if isStaff() && validCustomer()
+        && request.resource.data.n == int(id)
+        && counterAfter('customers') == int(id)
+        && request.resource.data.createdByEmail == myEmail();
+      allow update: if isStaff() && validCustomer() && keepsIdentity();
+      allow delete: if isAdmin();
+
+      match /comments/{c} {
+        allow read: if isStaff();
+        allow create: if isStaff() && validComment();
+        allow update, delete: if false;
+      }
+    }
+
+    function validComment() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['text', 'by', 'byEmail', 'system', 'at'])
+        && d.byEmail == myEmail()
+        && d.text is string && d.text.size() > 0 && d.text.size() <= 20000
+        && d.system is bool
+        && d.at == request.time;
+    }
+
+    // Everything else is closed.
+  }
+}

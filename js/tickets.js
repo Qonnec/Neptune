@@ -1,7 +1,7 @@
 "use strict";
-/* Support tickets: list, filters, detail, notes, create/edit. Tickets = Issues labelled type:ticket. */
-(() => {
-  const s = Auth.requireLogin();
+/* Support tickets: list, filters, detail, notes, create/edit. Tickets = Firestore "tickets" collection. */
+(async () => {
+  const s = await Auth.requireLogin();
   if (!s) return;
   const C = HD_CONFIG, $ = HD.$, esc = HD.esc;
   HD.renderNav("tickets", s);
@@ -14,7 +14,6 @@
 
   let tickets = [];
   let loadedState = null;
-  let assignees = [];
   let current = null;
   let editing = null;
   let dirty = false;
@@ -29,32 +28,30 @@
   HD.fillSelect($("#fPriority"), [{ value: "", label: "Any priority" }, ...C.priorities.map(HD.opt)], "");
   HD.fillSelect($("#fCategory"), [{ value: "", label: "Any category" }, ...C.categories.map(HD.opt)], "");
 
-  function toView(i) {
-    const { meta, text } = HD.parseBody(i.body);
+  function toView(d) {
     return {
-      n: i.number,
-      title: i.title,
-      customer: meta.customer || "",
-      contact: meta.contact || "",
-      meta,
-      text,
-      status: HD.labelValue(i, "status:") || (i.state === "closed" ? "closed" : "open"),
-      priority: HD.labelValue(i, "priority:") || "normal",
-      category: HD.labelValue(i, "cat:") || "",
-      assignee: i.assignee ? i.assignee.login : "",
-      updated: i.updated_at,
-      created: i.created_at,
-      issue: i
+      n: d.n,
+      title: d.title || "",
+      customer: d.customer || "",
+      contact: d.contact || "",
+      meta: d,
+      text: d.description || "",
+      status: d.status || (d.closed ? "closed" : "open"),
+      priority: d.priority || "normal",
+      category: d.category || "",
+      assignee: d.assignee || "",
+      updated: d.updatedAt || "",
+      created: d.createdAt || ""
     };
   }
 
   async function loadAssignees() {
-    try { assignees = await GH.listAssignees(); } catch { assignees = []; }
+    await HD.loadStaff();
     HD.fillSelect($("#fAssignee"), [
       { value: "", label: "Anyone" },
       { value: "__me", label: "Assigned to me" },
       { value: "__none", label: "Unassigned" },
-      ...assignees.map(a => ({ value: a.login, label: a.login }))
+      ...HD.staffItems()
     ], "");
   }
 
@@ -65,7 +62,7 @@
     $("#rows").innerHTML = `<tr><td colspan="7" class="muted center">Loading tickets…</td></tr>`;
     $("#empty").hidden = true;
     try {
-      tickets = (await GH.listIssues("type:ticket", state)).map(toView);
+      tickets = (await DB.list("tickets", state)).map(toView);
       loadedState = state;
     } catch (e) {
       HD.toast(e.message, "error");
@@ -82,7 +79,7 @@
       (["active", "all", "closed"].includes(f) || t.status === f) &&
       (!p || t.priority === p) &&
       (!c || t.category === c) &&
-      (!a || (a === "__me" ? t.assignee === s.login : a === "__none" ? !t.assignee : t.assignee === a)) &&
+      (!a || (a === "__me" ? t.assignee === s.email : a === "__none" ? !t.assignee : t.assignee === a)) &&
       (!q || `#${t.n} ${t.title} ${t.customer} ${t.contact}`.toLowerCase().includes(q)));
     const sort = $("#sort").value;
     if (sort === "priority") {
@@ -123,7 +120,7 @@
         <td>${HD.pill(STATUS[t.status], t.status)}</td>
         <td>${HD.pill(PRIO[t.priority], t.priority)}</td>
         <td class="hide-sm">${t.category ? esc(CAT[t.category]?.label || t.category) : '<span class="muted">—</span>'}</td>
-        <td class="hide-sm">${t.assignee ? esc(t.assignee) : '<span class="muted">—</span>'}</td>
+        <td class="hide-sm">${t.assignee ? esc(HD.nameOf(t.assignee)) : '<span class="muted">—</span>'}</td>
         <td class="hide-sm muted" title="${esc(HD.fmtDate(t.updated))}">${esc(HD.timeAgo(t.updated))}</td>
       </tr>`).join("");
   }
@@ -147,9 +144,8 @@
     d.hidden = false;
     if (!current || current.n !== n) d.innerHTML = `<p class="muted">Loading ticket #${n}…</p>`;
     try {
-      const [issue, comments] = await Promise.all([GH.getIssue(n), GH.listComments(n)]);
-      if (!HD.labelNames(issue).includes("type:ticket")) throw new Error(`#${n} is not a support ticket.`);
-      current = toView(issue);
+      const [doc, comments] = await Promise.all([DB.get("tickets", n), DB.comments("tickets", n)]);
+      current = toView(doc);
       renderDetail(current, comments);
     } catch (e) {
       d.innerHTML = `<a href="#/" class="back">← All tickets</a><p class="notice error">${esc(e.message)}</p>`;
@@ -164,8 +160,7 @@
   function renderDetail(t, comments) {
     const d = $("#detailView");
     const m = t.meta;
-    const assigneeItems = [{ value: "", label: "Unassigned" }, ...assignees.map(a => ({ value: a.login, label: a.login }))];
-    if (t.assignee && !assignees.some(a => a.login === t.assignee)) assigneeItems.push({ value: t.assignee, label: t.assignee });
+    const assigneeItems = [{ value: "", label: "Unassigned" }, ...HD.staffItems(t.assignee)];
 
     d.innerHTML = `
       <a href="#/" class="back">← All tickets</a>
@@ -176,7 +171,6 @@
         </div>
         <div class="actions">
           <button class="btn" id="editBtn" type="button">Edit</button>
-          <a class="btn" href="${esc(t.issue.html_url)}" target="_blank" rel="noopener noreferrer">View on GitHub</a>
         </div>
       </div>
       <div class="detail-grid">
@@ -232,7 +226,7 @@
       const newStatus = $("#noteStatus").value;
       await HD.busy($("#noteBtn"), async () => {
         try {
-          await GH.addComment(t.n, HD.buildBody({ by: s.name }, text));
+          await DB.addComment("tickets", t.n, text, s);
           dirty = true;
           HD.toast("Note added", "ok");
           if (newStatus) await applyChange(t.n, "status", newStatus, null);
@@ -246,26 +240,24 @@
     if (el) el.disabled = true;
     const lbl = (map, k) => map[k]?.label || k || "—";
     try {
-      const fresh = await GH.getIssue(n);
-      const patch = {};
-      let note = "";
-      if (field === "status") {
-        patch.labels = HD.withLabel(fresh, "status:", value);
-        if (value === "closed") { patch.state = "closed"; patch.state_reason = "completed"; }
-        else if (fresh.state === "closed") patch.state = "open";
-        note = `Status: ${lbl(STATUS, HD.labelValue(fresh, "status:"))} → ${lbl(STATUS, value)}`;
-      } else if (field === "priority") {
-        patch.labels = HD.withLabel(fresh, "priority:", value);
-        note = `Priority: ${lbl(PRIO, HD.labelValue(fresh, "priority:"))} → ${lbl(PRIO, value)}`;
-      } else if (field === "category") {
-        patch.labels = HD.withLabel(fresh, "cat:", value);
-        note = `Category: ${lbl(CAT, value)}`;
-      } else if (field === "assignee") {
-        patch.assignees = value ? [value] : [];
-        note = value ? `Assigned to ${value}` : "Unassigned";
-      }
-      await GH.updateIssue(n, patch);
-      await GH.addComment(n, HD.buildBody({ by: s.name, system: true }, note));
+      await DB.transact("tickets", n, fresh => {
+        if (field === "status") {
+          return {
+            patch: { status: value, closed: value === "closed" },
+            note: `Status: ${lbl(STATUS, fresh.status)} → ${lbl(STATUS, value)}`
+          };
+        }
+        if (field === "priority") {
+          return { patch: { priority: value }, note: `Priority: ${lbl(PRIO, fresh.priority)} → ${lbl(PRIO, value)}` };
+        }
+        if (field === "category") {
+          return { patch: { category: value }, note: `Category: ${lbl(CAT, value)}` };
+        }
+        if (field === "assignee") {
+          return { patch: { assignee: value }, note: value ? `Assigned to ${HD.nameOf(value)}` : "Unassigned" };
+        }
+        return {};
+      }, s);
       dirty = true;
       HD.toast("Ticket updated", "ok");
     } catch (e) {
@@ -284,8 +276,9 @@
     HD.$$(".create-only", f).forEach(el => { el.hidden = !!t; });
     HD.fillSelect($("#tCategory"), C.categories.map(HD.opt), C.categories[0].key);
     HD.fillSelect($("#tPriority"), C.priorities.map(HD.opt), "normal");
-    HD.fillSelect($("#tAssignee"), [{ value: "", label: "Unassigned" }, ...assignees.map(a => ({ value: a.login, label: a.login }))],
-      assignees.some(a => a.login === s.login) ? s.login : "");
+    const items = HD.staffItems();
+    HD.fillSelect($("#tAssignee"), [{ value: "", label: "Unassigned" }, ...items],
+      items.some(a => a.value === s.email) ? s.email : "");
     $("#customerList").innerHTML = [...new Set(tickets.map(x => x.customer).filter(Boolean))].sort()
       .map(c => `<option value="${esc(c)}"></option>`).join("");
     if (t) {
@@ -314,26 +307,28 @@
       try {
         if (editing) {
           const n = editing.n;
-          const fresh = await GH.getIssue(n);
-          const { meta } = HD.parseBody(fresh.body);
-          await GH.updateIssue(n, { title, body: HD.buildBody({ ...meta, ...fields }, desc) });
+          await DB.transact("tickets", n, () => ({ patch: { title, ...fields, description: desc } }), s);
           $("#ticketDialog").close();
           dirty = true;
           HD.toast("Ticket saved", "ok");
           await showDetail(n);
         } else {
-          const cat = $("#tCategory").value;
-          const assignee = $("#tAssignee").value;
-          const issue = await GH.createIssue({
+          const n = await DB.create("tickets", {
             title,
-            body: HD.buildBody({ ...fields, createdBy: s.name }, desc),
-            labels: ["type:ticket", "status:open", `priority:${$("#tPriority").value}`, ...(cat ? [`cat:${cat}`] : [])],
-            ...(assignee ? { assignees: [assignee] } : {})
+            ...fields,
+            description: desc,
+            status: "open",
+            closed: false,
+            priority: $("#tPriority").value,
+            category: $("#tCategory").value,
+            assignee: $("#tAssignee").value,
+            createdBy: s.name,
+            createdByEmail: s.email
           });
           $("#ticketDialog").close();
           dirty = true;
-          HD.toast(`Ticket #${issue.number} created`, "ok");
-          location.hash = `#/t/${issue.number}`;
+          HD.toast(`Ticket #${n} created`, "ok");
+          location.hash = `#/t/${n}`;
         }
       } catch (err) {
         HD.toast(err.message, "error");
@@ -357,9 +352,7 @@
   });
 
   // ---------- Start ----------
-  (async () => {
-    await loadAssignees();
-    await load(true);
-    if (location.hash.startsWith("#/t/")) route();
-  })();
+  await loadAssignees();
+  await load(true);
+  if (location.hash.startsWith("#/t/")) route();
 })();

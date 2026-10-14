@@ -1,8 +1,8 @@
 "use strict";
 /* Onboarding funnel: KPIs, funnel chart, Kanban board, customer detail.
-   Customers = Issues labelled type:onboarding + stage:<key>. Stage history lives in the issue's hd-meta. */
-(() => {
-  const s = Auth.requireLogin();
+   Customers = Firestore "customers" collection. Stage history and checklist live on each customer record. */
+(async () => {
+  const s = await Auth.requireLogin();
   if (!s) return;
   const C = HD_CONFIG, $ = HD.$, esc = HD.esc;
   HD.renderNav("funnel", s);
@@ -15,7 +15,6 @@
   const stageLabel = k => (k === "lost" ? LOST.label : STAGES[IDX[k]]?.label || k || "—");
 
   let customers = [];
-  let assignees = [];
   let openN = null;
   let editing = null;
   let dragN = null;
@@ -24,44 +23,42 @@
   HD.fillSelect($("#cStage"), STAGES.map(HD.opt), STAGES[0].key);
   $("#planList").innerHTML = C.plans.map(p => `<option value="${esc(p)}"></option>`).join("");
 
-  function toView(i) {
-    const { meta, text } = HD.parseBody(i.body);
-    const stage = HD.labelValue(i, "stage:") || STAGES[0].key;
-    const history = (Array.isArray(meta.history) ? meta.history : []).filter(h => h && h.stage && h.at);
+  function toView(d) {
+    const stage = d.stage || STAGES[0].key;
+    const history = (Array.isArray(d.history) ? d.history : []).filter(h => h && h.stage && h.at);
     const lastEntry = [...history].reverse().find(h => h.stage === stage);
-    const since = lastEntry ? lastEntry.at : i.created_at;
-    const checklist = Array.isArray(meta.checklist) ? meta.checklist : [];
+    const since = lastEntry ? lastEntry.at : d.createdAt || new Date().toISOString();
+    const checklist = Array.isArray(d.checklist) ? d.checklist : [];
     return {
-      n: i.number,
-      issue: i,
-      shop: i.title,
-      meta,
-      notes: text,
+      n: d.n,
+      shop: d.shop || "",
+      meta: d,
+      notes: d.notes || "",
       stage,
       history,
       since,
       daysInStage: HD.daysSince(since),
       checklist,
       done: checklist.filter(c => c.done).length,
-      value: Number(meta.value) || 0,
-      owner: i.assignee ? i.assignee.login : "",
+      value: Number(d.value) || 0,
+      owner: d.owner || "",
       lost: stage === "lost"
     };
   }
 
   async function loadAssignees() {
-    try { assignees = await GH.listAssignees(); } catch { assignees = []; }
+    await HD.loadStaff();
     HD.fillSelect($("#fOwner"), [
       { value: "", label: "All owners" },
       { value: "__me", label: "Mine" },
-      ...assignees.map(a => ({ value: a.login, label: a.login }))
+      ...HD.staffItems()
     ], "");
   }
 
   async function load() {
     $("#board").innerHTML = `<p class="muted">Loading customers…</p>`;
     try {
-      customers = (await GH.listIssues("type:onboarding", "all")).map(toView);
+      customers = (await DB.list("customers", "all")).map(toView);
     } catch (e) {
       HD.toast(e.message, "error");
       customers = [];
@@ -69,20 +66,12 @@
     render();
   }
 
-  function upsert(issue) {
-    const v = toView(issue);
+  function upsert(doc) {
+    const v = toView(doc);
     const i = customers.findIndex(c => c.n === v.n);
     if (i >= 0) customers[i] = v; else customers.unshift(v);
     render();
     return v;
-  }
-
-  /** Read-modify-write of the hd-meta block (fetches fresh copy first to avoid overwriting others' edits). */
-  async function updateMeta(n, mutate) {
-    const fresh = await GH.getIssue(n);
-    const { meta, text } = HD.parseBody(fresh.body);
-    const r = mutate(meta, fresh) || {};
-    return GH.updateIssue(n, { body: HD.buildBody(meta, r.text ?? text), ...(r.patch || {}) });
   }
 
   // ---------- Filtering ----------
@@ -90,7 +79,7 @@
     const q = $("#q").value.trim().toLowerCase();
     const o = $("#fOwner").value;
     return customers.filter(c =>
-      (!o || (o === "__me" ? c.owner === s.login : c.owner === o)) &&
+      (!o || (o === "__me" ? c.owner === s.email : c.owner === o)) &&
       (!q || `${c.shop} ${c.meta.contact || ""} ${c.meta.city || ""} ${c.meta.email || ""}`.toLowerCase().includes(q)));
   }
 
@@ -136,7 +125,7 @@
       ["Active customers", active.length, `${HD.money(sum(active))}/mo`],
       ["Lead → active", first ? `${Math.round((last / first) * 100)}%` : "—", `${last} of ${first} leads`],
       ["Avg. days to go-live", goLive == null ? "—" : Math.round(goLive), "from first contact"],
-      ["Lost", list.filter(c => c.lost).length, "closed as not planned"]
+      ["Lost", list.filter(c => c.lost).length, "marked as lost"]
     ];
     $("#kpis").innerHTML = tiles.map(([l, v, sub]) =>
       `<div class="stat"><div class="stat-value">${esc(v)}</div><div class="stat-label">${esc(l)}</div><div class="stat-sub">${esc(sub)}</div></div>`).join("");
@@ -173,7 +162,7 @@
       <div class="kcard-meta"><span>${c.value ? `${esc(HD.money(c.value))}/mo` : ""}</span>
         <span class="${stale ? "stale" : ""}">${c.daysInStage}d in stage</span></div>
       ${total ? `<div class="progress" title="Checklist ${c.done}/${total}"><span style="width:${pct}%"></span></div>` : ""}
-      <div class="kcard-foot"><span class="small muted">${c.owner ? esc(c.owner) : "No owner"}</span>
+      <div class="kcard-foot"><span class="small muted">${c.owner ? esc(HD.nameOf(c.owner)) : "No owner"}</span>
         <select class="move" aria-label="Move ${esc(c.shop)} to stage">${stageOptions(c.stage)}</select></div>
     </article>`;
   }
@@ -204,16 +193,16 @@
     c.lost = to === "lost";
     render();
     try {
-      const updated = await updateMeta(n, (meta, fresh) => {
-        meta.history = Array.isArray(meta.history) ? meta.history : [];
-        meta.history.push({ stage: to, at: new Date().toISOString(), by: s.name });
-        const patch = { labels: HD.withLabel(fresh, "stage:", to) };
-        if (to === "lost") { patch.state = "closed"; patch.state_reason = "not_planned"; }
-        else if (fresh.state === "closed") patch.state = "open";
-        return { patch };
-      });
-      await GH.addComment(n, HD.buildBody({ by: s.name, system: true },
-        `Stage: ${stageLabel(prev)} → ${stageLabel(to)}${reason ? `\nReason: ${reason}` : ""}`));
+      const updated = await DB.transact("customers", n, fresh => {
+        const history = Array.isArray(fresh.history) ? [...fresh.history] : [];
+        history.push({ stage: to, at: new Date().toISOString(), by: s.name });
+        const patch = { stage: to, lost: to === "lost", history };
+        if (to === "lost") patch.lostReason = reason || "";
+        return {
+          patch,
+          note: `Stage: ${stageLabel(fresh.stage)} → ${stageLabel(to)}${reason ? `\nReason: ${reason}` : ""}`
+        };
+      }, s);
       upsert(updated);
       HD.toast(`${c.shop} → ${stageLabel(to)}`, "ok");
       if (openN === n) openDetail(n);
@@ -278,8 +267,8 @@
       dlg.showModal();
     }
     try {
-      const [issue, comments] = await Promise.all([GH.getIssue(n), GH.listComments(n)]);
-      const c = upsert(issue);
+      const [doc, comments] = await Promise.all([DB.get("customers", n), DB.comments("customers", n)]);
+      const c = upsert(doc);
       renderDetail(c, comments);
     } catch (e) {
       box.innerHTML = `<header class="dialog-head"><h2>Could not load</h2><button type="button" class="icon-btn" data-close aria-label="Close">×</button></header>
@@ -290,8 +279,7 @@
   function renderDetail(c, comments) {
     const box = $("#detailBody");
     const m = c.meta;
-    const ownerItems = [{ value: "", label: "No owner" }, ...assignees.map(a => ({ value: a.login, label: a.login }))];
-    if (c.owner && !assignees.some(a => a.login === c.owner)) ownerItems.push({ value: c.owner, label: c.owner });
+    const ownerItems = [{ value: "", label: "No owner" }, ...HD.staffItems(c.owner)];
     const row = (k, v) => `<dt>${k}</dt><dd>${v || "—"}</dd>`;
 
     box.innerHTML = `
@@ -316,6 +304,7 @@
                 ${row("Plan", esc(m.plan))}
                 ${row("Monthly value", c.value ? esc(HD.money(c.value)) : "")}
                 ${row("Lead source", esc(m.source))}
+                ${c.lost && m.lostReason ? row("Lost reason", esc(m.lostReason)) : ""}
               </dl>
               ${c.notes.trim() ? `<h3 style="margin-top:14px">Notes</h3><div class="prose">${esc(c.notes)}</div>` : ""}
             </section>
@@ -356,7 +345,6 @@
         </div>
       </div>
       <footer class="dialog-foot">
-        <a class="btn" href="${esc(c.issue.html_url)}" target="_blank" rel="noopener noreferrer">View on GitHub</a>
         <span class="spacer"></span>
         <button type="button" class="btn" id="dEdit">Edit details</button>
         <button type="button" class="btn" data-close>Close</button>
@@ -368,8 +356,8 @@
       const v = e.target.value;
       e.target.disabled = true;
       try {
-        const updated = await GH.updateIssue(n, { assignees: v ? [v] : [] });
-        await GH.addComment(n, HD.buildBody({ by: s.name, system: true }, v ? `Owner: ${v}` : "Owner removed"));
+        const updated = await DB.transact("customers", n,
+          () => ({ patch: { owner: v }, note: v ? `Owner: ${HD.nameOf(v)}` : "Owner removed" }), s);
         upsert(updated);
         HD.toast("Owner updated", "ok");
       } catch (err) { HD.toast(err.message, "error"); }
@@ -380,10 +368,12 @@
       const i = Number(cb.dataset.i);
       const checked = cb.checked;
       try {
-        const updated = await updateMeta(n, meta => {
-          const it = meta.checklist?.[i];
+        const updated = await DB.transact("customers", n, fresh => {
+          const checklist = Array.isArray(fresh.checklist) ? fresh.checklist.map(x => ({ ...x })) : [];
+          const it = checklist[i];
           if (it) { it.done = checked; it.at = checked ? new Date().toISOString() : null; it.by = checked ? s.name : null; }
-        });
+          return { patch: { checklist } };
+        }, s);
         upsert(updated);
         openDetail(n);
       } catch (err) {
@@ -397,10 +387,11 @@
       const t = $("#newItem").value.trim();
       if (!t) return;
       try {
-        const updated = await updateMeta(n, meta => {
-          meta.checklist = Array.isArray(meta.checklist) ? meta.checklist : [];
-          meta.checklist.push({ t, done: false });
-        });
+        const updated = await DB.transact("customers", n, fresh => {
+          const checklist = Array.isArray(fresh.checklist) ? [...fresh.checklist] : [];
+          checklist.push({ t, done: false });
+          return { patch: { checklist } };
+        }, s);
         upsert(updated);
         openDetail(n);
       } catch (err) { HD.toast(err.message, "error"); }
@@ -411,7 +402,7 @@
       if (!text) return;
       await HD.busy($("#cNoteBtn"), async () => {
         try {
-          await GH.addComment(n, HD.buildBody({ by: s.name }, text));
+          await DB.addComment("customers", n, text, s);
           HD.toast("Note added", "ok");
           await openDetail(n);
         } catch (err) { HD.toast(err.message, "error"); }
@@ -433,8 +424,9 @@
     $("#custTitle").textContent = c ? `Edit ${c.shop}` : "New customer";
     $("#cSave").textContent = c ? "Save changes" : "Add customer";
     HD.$$(".create-only", f).forEach(el => { el.hidden = !!c; });
-    HD.fillSelect($("#cOwner"), [{ value: "", label: "No owner" }, ...assignees.map(a => ({ value: a.login, label: a.login }))],
-      assignees.some(a => a.login === s.login) ? s.login : "");
+    const items = HD.staffItems();
+    HD.fillSelect($("#cOwner"), [{ value: "", label: "No owner" }, ...items],
+      items.some(a => a.value === s.email) ? s.email : "");
     if (c) {
       const m = c.meta;
       $("#cShop").value = c.shop;
@@ -470,27 +462,26 @@
       try {
         if (editing) {
           const n = editing.n;
-          const updated = await updateMeta(n, meta => { Object.assign(meta, fields); return { text: notes, patch: { title: shop } }; });
+          const updated = await DB.transact("customers", n, () => ({ patch: { shop, ...fields, notes } }), s);
           upsert(updated);
           $("#custDialog").close();
           HD.toast("Customer saved", "ok");
           openDetail(n);
         } else {
           const stage = $("#cStage").value;
-          const owner = $("#cOwner").value;
-          const meta = {
+          const n = await DB.create("customers", {
+            shop,
             ...fields,
+            notes,
+            stage,
+            lost: false,
+            owner: $("#cOwner").value,
             createdBy: s.name,
+            createdByEmail: s.email,
             checklist: C.onboardingChecklist.map(t => ({ t, done: false })),
             history: [{ stage, at: new Date().toISOString(), by: s.name }]
-          };
-          const issue = await GH.createIssue({
-            title: shop,
-            body: HD.buildBody(meta, notes),
-            labels: ["type:onboarding", `stage:${stage}`],
-            ...(owner ? { assignees: [owner] } : {})
           });
-          upsert(issue);
+          upsert(await DB.get("customers", n));
           $("#custDialog").close();
           HD.toast(`${shop} added`, "ok");
         }
@@ -507,8 +498,6 @@
   $("#refreshBtn").addEventListener("click", load);
   $("#newCustBtn").addEventListener("click", () => openCustDialog());
 
-  (async () => {
-    await loadAssignees();
-    await load();
-  })();
+  await loadAssignees();
+  await load();
 })();

@@ -1,5 +1,5 @@
 "use strict";
-/* Shared helpers: escaping, formatting, issue-body metadata, labels, small UI pieces. */
+/* Shared helpers: escaping, formatting, staff names, small UI pieces. */
 const HD = (() => {
   const C = window.HD_CONFIG;
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -23,39 +23,28 @@ const HD = (() => {
   const daysSince = iso => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
   const money = n => new Intl.NumberFormat("en-PH", { style: "currency", currency: C.currency, maximumFractionDigits: 0 }).format(n || 0);
 
-  // ---------- Issue body metadata ----------
-  // Structured fields are stored as a hidden HTML comment at the top of the issue body:
-  //   <!-- hd-meta {"customer":"..."} -->
-  //   free text...
-  const META_RE = /^\s*<!--\s*hd-meta\s+([\s\S]*?)\s*-->[ \t]*\r?\n?/;
-  function parseBody(body) {
-    body = body || "";
-    const m = META_RE.exec(body);
-    if (!m) return { meta: {}, text: body };
-    let meta = {};
-    try { meta = JSON.parse(m[1]) || {}; } catch { meta = {}; }
-    return { meta, text: body.slice(m[0].length) };
-  }
-  function buildBody(meta, text) {
-    // Escape < and > so user text can never close the HTML comment early.
-    const json = JSON.stringify(meta || {}).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
-    return `<!-- hd-meta ${json} -->\n${text || ""}`;
-  }
-
-  // ---------- Labels ----------
-  const labelNames = issue => (issue.labels || []).map(l => (typeof l === "string" ? l : l.name));
-  const labelValue = (issue, prefix) => {
-    const n = labelNames(issue).find(x => x.startsWith(prefix));
-    return n ? n.slice(prefix.length) : null;
-  };
-  /** Returns the full label list with the `prefix:` label replaced by prefix+value. */
-  const withLabel = (issue, prefix, value) => {
-    const keep = labelNames(issue).filter(n => !n.startsWith(prefix));
-    if (value) keep.push(prefix + value);
-    return keep;
-  };
+  // ---------- Lists ----------
   const byKey = list => Object.fromEntries(list.map(x => [x.key, x]));
   const opt = x => ({ value: x.key, label: x.label });
+
+  // ---------- Staff (assignees / owners are stored by email) ----------
+  let staffList = [];
+  async function loadStaff() {
+    try { staffList = await DB.staff(); } catch { staffList = []; }
+    return staffList;
+  }
+  const activeStaff = () => staffList.filter(x => x.active);
+  function nameOf(email) {
+    if (!email) return "";
+    const m = staffList.find(x => x.email === email);
+    return m ? m.name : email;
+  }
+  /** Select items for active staff, plus `keep` (a current value that is no longer active). */
+  function staffItems(keep) {
+    const items = activeStaff().map(x => ({ value: x.email, label: x.name }));
+    if (keep && !items.some(i => i.value === keep)) items.push({ value: keep, label: nameOf(keep) });
+    return items;
+  }
 
   function pill(item, fallback) {
     if (!item) return `<span class="pill">${esc(fallback || "—")}</span>`;
@@ -68,13 +57,13 @@ const HD = (() => {
       .join("");
   }
 
+  /** c = { text, by, byEmail, system, at } */
   function renderComment(c) {
-    const { meta, text } = parseBody(c.body);
-    const who = meta.by || c.user?.login || "unknown";
-    return `<div class="comment${meta.system ? " system" : ""}">
+    const who = c.by || c.byEmail || "unknown";
+    return `<div class="comment${c.system ? " system" : ""}">
       <div class="comment-head"><strong>${esc(who)}</strong>
-        <span class="muted small" title="${esc(fmtDate(c.created_at))}">${esc(timeAgo(c.created_at))}</span></div>
-      <div class="comment-body">${esc(text)}</div></div>`;
+        <span class="muted small" title="${esc(fmtDate(c.at))}">${esc(timeAgo(c.at))}</span></div>
+      <div class="comment-body">${esc(c.text)}</div></div>`;
   }
 
   // ---------- UI ----------
@@ -97,22 +86,11 @@ const HD = (() => {
 
   async function busy(btn, fn) {
     if (!btn) return fn();
-    const label = btn.textContent;
+    const label = btn.innerHTML;
     btn.disabled = true;
     btn.textContent = btn.dataset.busy || "Working…";
     try { return await fn(); }
-    finally { btn.disabled = false; btn.textContent = label; }
-  }
-
-  function download(filename, text) {
-    const blob = new Blob([text], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    finally { btn.disabled = false; btn.innerHTML = label; }
   }
 
   function renderNav(active, s) {
@@ -120,11 +98,13 @@ const HD = (() => {
     if (!el) return;
     const link = (key, href, label) =>
       `<a href="${href}"${active === key ? ' class="active" aria-current="page"' : ""}>${label}</a>`;
-    const links = (s ? link("tickets", "tickets.html", "Tickets") + link("funnel", "funnel.html", "Onboarding") : "") +
-      (!s || s.role === "admin" ? link("admin", "admin.html", "Admin") : "");
+    const links = s
+      ? link("tickets", "tickets.html", "Tickets") + link("funnel", "funnel.html", "Onboarding") +
+        (s.role === "admin" ? link("admin", "admin.html", "Admin") : "")
+      : "";
     const user = s
-      ? `${s.avatar ? `<img src="${esc(s.avatar)}" alt="" class="avatar">` : ""}
-         <span class="nav-name">${esc(s.name)}</span>
+      ? `${s.avatar ? `<img src="${esc(s.avatar)}" alt="" class="avatar" referrerpolicy="no-referrer">` : ""}
+         <span class="nav-name" title="${esc(s.email)}">${esc(s.name)}</span>
          <button class="btn small" id="logoutBtn" type="button">Sign out</button>`
       : `<a class="btn small" href="index.html">Sign in</a>`;
     el.innerHTML = `<div class="nav-inner">
@@ -146,8 +126,8 @@ const HD = (() => {
   }
 
   return {
-    $, $$, esc, fmtDate, timeAgo, daysSince, money,
-    parseBody, buildBody, labelNames, labelValue, withLabel, byKey, opt, pill,
-    fillSelect, renderComment, toast, busy, download, renderNav, wireDialogs
+    $, $$, esc, fmtDate, timeAgo, daysSince, money, byKey, opt, pill,
+    loadStaff, activeStaff, nameOf, staffItems,
+    fillSelect, renderComment, toast, busy, renderNav, wireDialogs
   };
 })();

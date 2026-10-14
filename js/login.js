@@ -1,6 +1,5 @@
 "use strict";
-(() => {
-  if (Auth.isActive()) { location.replace("tickets.html"); return; }
+(async () => {
   const $ = HD.$;
 
   function showMsg(text, type) {
@@ -12,22 +11,21 @@
 
   const msg = new URLSearchParams(location.search).get("msg");
   if (msg) showMsg(msg);
-  if (HD_CONFIG.dataOwner.startsWith("YOUR-")) {
-    showMsg("Setup needed: set dataOwner and dataRepo in js/config.js.", "error");
-  }
-  if (!window.crypto?.subtle) {
-    showMsg("This page must be opened over HTTPS (or localhost) to sign in.", "error");
+  if (!FB.configured) {
+    showMsg("Setup needed: paste your Firebase config into js/config.js.", "error");
+    $("#googleBtn").disabled = true;
+    return;
   }
 
-  $("#loginForm").addEventListener("submit", async e => {
-    e.preventDefault();
+  $("#googleBtn").addEventListener("click", async () => {
     try {
-      await HD.busy($("#loginBtn"), () => Auth.login($("#username").value, $("#password").value));
+      await HD.busy($("#googleBtn"), () => Auth.signIn());
       location.replace("tickets.html");
     } catch (err) {
-      $("#password").value = "";
       showMsg(err.message, "error");
-      $("#password").focus();
     }
   });
+
+  // Already signed in in this tab → go straight in (tickets.html re-checks the staff list).
+  if (!msg && await Auth.isActive()) location.replace("tickets.html");
 })();

@@ -1,29 +1,34 @@
 "use strict";
 /*
  * Autometrik Help Desk — configuration.
- * Before deploying, set dataOwner and dataRepo to the PRIVATE repository
- * that stores tickets and onboarding customers (as GitHub Issues).
+ * Before deploying, paste your Firebase web-app config below
+ * (Firebase console → Project settings → General → Your apps → SDK setup and configuration → Config).
+ * These values are not secrets: access is enforced by Google sign-in + firestore.rules.
  */
 window.HD_CONFIG = Object.freeze({
   appName: "Autometrik Help Desk",
 
-  // Private data repository (tickets + onboarding live here as Issues)
-  dataOwner: "hmorales",
-  dataRepo: "neptune",
+  // Firebase project (Auth with Google + Firestore)
+  firebase: {
+     apiKey: "AIzaSy...",
+     authDomain: "autometrik-helpdesk.firebaseapp.com",
+     projectId: "autometrik-helpdesk",
+     appId: "1:1234567890:web:abc123..."
+  },
 
-  // Encrypted login file, served by GitHub Pages
-  usersFile: "data/users.enc.json",
+  // Optional: only offer accounts from this Google Workspace domain (e.g. "pandai.com").
+  // Leave "" to allow any Google account that is on the staff list.
+  // This is a convenience filter; the staff list in Firestore is what actually grants access.
+  allowedDomain: "",
 
   // Security
   sessionTimeoutMinutes: 30,
-  pbkdf2Iterations: 600000,
-  minPasswordLength: 12,
 
   // Display
   currency: "PHP",
   staleDays: 14, // onboarding cards older than this in one stage are flagged
 
-  // Ticket labels  ->  status:<key>, priority:<key>, cat:<key>
+  // Ticket fields
   ticketStatuses: [
     { key: "open", label: "Open", color: "1f6feb" },
     { key: "in-progress", label: "In progress", color: "bf8700" },
@@ -49,7 +54,7 @@ window.HD_CONFIG = Object.freeze({
     { key: "other", label: "Other", color: "ededed" }
   ],
 
-  // Onboarding funnel  ->  stage:<key>   (order matters; last = fully onboarded)
+  // Onboarding funnel stages (order matters; last = fully onboarded)
   funnelStages: [
     { key: "lead", label: "Lead", color: "d4e5f7" },
     { key: "demo-scheduled", label: "Demo scheduled", color: "b6d4f2" },

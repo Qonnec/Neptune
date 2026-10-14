@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; connect-src 'self' https://api.github.com; base-uri 'self'; form-action 'self'; object-src 'none'">
-  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.googleusercontent.com; connect-src 'self' https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com https://apis.google.com; frame-src https://*.firebaseapp.com https://*.web.app https://accounts.google.com https://apis.google.com; base-uri 'self'; form-action 'self'; object-src 'none'">
+  <meta name="referrer" content="strict-origin">
   <meta name="robots" content="noindex, nofollow">
   <title>Admin · Autometrik Help Desk</title>
   <link rel="stylesheet" href="css/style.css">
@@ -13,68 +13,59 @@
   <header id="nav"></header>
   <main class="container narrow">
     <h1>Admin</h1>
-    <p class="muted">Manage who can sign in. Everything here runs in your browser — nothing changes until you commit the downloaded file to <code>data/users.enc.json</code> in the site repository.</p>
+    <p class="muted">Manage who can sign in. People sign in with their Google account; only emails on this staff list get access.</p>
+    <p id="notAdmin" class="notice error" hidden>Only help desk admins can manage staff.</p>
 
-    <section class="panel">
-      <h2>1. Add a user or reset a password</h2>
-      <p class="muted small">Using an existing username replaces that user's entry (this is how you reset a password).</p>
-      <form id="userForm" class="form-grid" autocomplete="off">
-        <div class="field"><label for="uName">Username *</label><input id="uName" required autocapitalize="none" spellcheck="false" placeholder="e.g. hen"></div>
-        <div class="field"><label for="uFull">Full name</label><input id="uFull" placeholder="Shown on notes and history"></div>
-        <div class="field"><label for="uRole">Role</label>
-          <select id="uRole"><option value="agent">Agent</option><option value="admin">Admin</option></select></div>
-        <div class="field"></div>
-        <div class="field"><label for="uPass">Password *</label><input id="uPass" type="password" required autocomplete="new-password"></div>
-        <div class="field"><label for="uPass2">Confirm password *</label><input id="uPass2" type="password" required autocomplete="new-password"></div>
-        <div class="field span-2">
-          <label for="uToken">GitHub fine-grained token for this user *</label>
-          <div class="inline-form">
-            <input id="uToken" type="password" required autocomplete="off" spellcheck="false" placeholder="github_pat_…">
-            <button id="testToken" class="btn" type="button" data-busy="Testing…">Test token</button>
+    <div id="adminArea" hidden>
+      <section class="panel">
+        <h2>Add or update a staff member</h2>
+        <p class="muted small">Use the exact email of their Google account. Saving an existing email updates that person.</p>
+        <form id="staffForm" class="form-grid" autocomplete="off">
+          <div class="field"><label for="sEmail">Google account email *</label><input id="sEmail" type="email" required autocapitalize="none" spellcheck="false" placeholder="name@example.com"></div>
+          <div class="field"><label for="sName">Full name *</label><input id="sName" required maxlength="80" placeholder="Shown on notes and history"></div>
+          <div class="field"><label for="sRole">Role</label>
+            <select id="sRole"><option value="agent">Agent</option><option value="admin">Admin</option></select></div>
+          <div class="field"><label class="check" style="margin-top:26px"><input type="checkbox" id="sActive" checked> Active (can sign in)</label></div>
+          <div class="span-2 row-end">
+            <button type="button" class="btn" id="sClear">Clear</button>
+            <button type="submit" class="btn primary" id="sSave" data-busy="Saving…">Save staff member</button>
           </div>
-          <span class="muted small">Only access to the data repository, with <strong>Issues: Read and write</strong>. See README for steps.</span>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Staff</h2>
+          <button id="sRefresh" class="btn small" type="button">Refresh</button>
         </div>
-        <div class="span-2 row-end"><button type="submit" class="btn primary" id="encryptBtn" data-busy="Encrypting…">Encrypt user entry</button></div>
-      </form>
-
-      <div id="entryResult" hidden>
-        <p class="notice ok">Encrypted entry ready for <strong id="entryUser"></strong>. Download the updated file and commit it as <code>data/users.enc.json</code>. The password and token fields have been cleared.</p>
-        <div class="row-end">
-          <button class="btn" id="copyEntry" type="button">Copy entry JSON</button>
-          <button class="btn primary" id="downloadUsers" type="button">Download updated users.enc.json</button>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead>
+            <tbody id="staffRows"><tr><td colspan="5" class="muted center">Loading…</td></tr></tbody>
+          </table>
         </div>
-        <pre id="entryJson" class="code"></pre>
-      </div>
-    </section>
+        <p class="muted small" style="margin-top:10px">Deactivating or removing someone takes effect on their next page load or action. To cut access completely at once, also disable the user in Firebase → Authentication → Users.</p>
+      </section>
 
-    <section class="panel">
-      <h2>2. Remove a user</h2>
-      <form id="removeForm" class="inline-form">
-        <label for="removeUser" class="sr-only">Username to remove</label>
-        <input id="removeUser" placeholder="username" required autocapitalize="none">
-        <button class="btn danger" type="submit">Download file without this user</button>
-      </form>
-      <p class="muted small" style="margin-top:10px">Removing the entry isn't enough on its own: old versions stay in git history. Always also <strong>revoke the person's GitHub token</strong> or remove them from the data repository — that is what actually cuts off access.</p>
-    </section>
-
-    <section class="panel">
-      <h2>3. Set up labels in the data repository</h2>
-      <p>Creates or updates the type, status, priority, category and stage labels in <code id="repoName"></code>. Run once after setup, and again whenever you change those lists in <code>js/config.js</code>. You must be signed in.</p>
-      <button id="initLabels" class="btn primary" type="button" data-busy="Working…">Create / update labels</button>
-      <pre id="labelLog" class="code" hidden></pre>
-    </section>
-
-    <section class="panel">
-      <h2>Users file</h2>
-      <p id="usersInfo" class="muted">Loading…</p>
-    </section>
+      <section class="panel">
+        <h2>Setup</h2>
+        <dl class="kv">
+          <dt>Firebase project</dt><dd id="projId"></dd>
+          <dt>Signed in as</dt><dd id="meEmail"></dd>
+          <dt>Allowed domain</dt><dd id="domain"></dd>
+        </dl>
+      </section>
+    </div>
   </main>
 
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
   <script src="js/config.js"></script>
-  <script src="js/crypto.js"></script>
+  <script src="js/firebase.js"></script>
   <script src="js/common.js"></script>
   <script src="js/auth.js"></script>
-  <script src="js/api.js"></script>
+  <script src="js/db.js"></script>
   <script src="js/admin.js"></script>
 </body>
 </html>
