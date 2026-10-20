@@ -10,10 +10,10 @@ window.HD_CONFIG = Object.freeze({
 
   // Firebase project (Auth with Google + Firestore)
   firebase: {
-     apiKey: "AIzaSy...",
-     authDomain: "autometrik-helpdesk.firebaseapp.com",
-     projectId: "autometrik-helpdesk",
-     appId: "1:1234567890:web:abc123..."
+     apiKey: "AIzaSyDqfM1mUG6HgpAmA2MwZe91merdxBpfLv0",
+     authDomain: "autometrik-help-desk.firebaseapp.com",
+     projectId: "autometrik-help-desk",
+     appId: "1:640874249696:web:5f0b4e2aca77ad88f73f85"
   },
 
   // Optional: only offer accounts from this Google Workspace domain (e.g. "pandai.com").
